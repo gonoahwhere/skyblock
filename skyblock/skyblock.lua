@@ -1,348 +1,392 @@
-skyblock.players = {};
- 
+skyblock.players = {}
 
--- QUEST MANAGEMENT: init
+-- Define the different quest types
 local quest_types = skyblock.quest_types;
- 
-skyblock.init_level = function(name,level) -- inits/resets player achievements on level
-	if not skyblock.quests[level] then return end -- nonexistent quests
-	local pdata = skyblock.players[name];
-	
-	--reset current quests
-	for k,_ in pairs(quest_types) do pdata[k] = nil	end
 
-	pdata.data = {}; -- various extra data that can be used for more complex quests
-	pdata.completed = 0
-	pdata.level = level
-	
-	local total = 0;
-	
-	for k,v in pairs( skyblock.quests[level] ) do -- init all achievements to 0
-		if quest_types[k] then
-			local w = {};
-			for k_,v_ in pairs(v) do
-				w[k_] = 0; 
-				if not v_.hidden then total =  total + 1 end -- hidden quests dont count towards goal
-			end
-			pdata[k] = w; -- for example: pdata.on_dignode = {["default:dirt"]=0}
-			
-		end
-	end
-	pdata.total =  total; -- how many quests on this level
- end
- 
-  -- QUESTS TRACKING --
-  
- local track_quest = function(pos, item, digger, quest_type)
-	
-	local name = digger:get_player_name();
-	local pdata = skyblock.players[name]; -- all player data
-	
-	local stats = pdata.stats;--update stats 
-	stats[quest_type] = (stats[quest_type] or 0) + 1
-	
-	local qdata =  pdata[quest_type]; -- quest data for this player
-	if qdata and qdata[item] then else return end -- player has no such quest in progress!
-	
-	local level = pdata.level;
-	local data = skyblock.quests[level][quest_type];
-	if data and data[item] then data = data[item] else return end -- is there quest of this type and quest for this item?
+-- Initializes level/achievements
+skyblock.init_level = function(name, level)
+    if not skyblock.quests[level] then
+        return
+    end
 
-	local count = qdata[item]; 
-	
-	if count < data.count then -- only if quest not yet completed
-		if data.hidden then -- quest is hidden, doesnt count toward progress
-			if data.on_progress then  -- optionally do something extra
-				if data.on_progress(pdata.data) then qdata[item] = data.count end -- if on_progress returns true we are done, stop tracking
-				return
-			end
-		end
-		
-		count = count + 1
-		qdata[item] = count;
-		if data.on_progress then  -- optionally do something extra
-			if data.on_progress(pdata.data) then count = data.count end -- if on_progress returns true we are done
-		end
-		if count >= data.count then-- did we just complete the quest?
-			if data.on_completed and not data.on_completed(pos,name) then 
-				qdata[item] = data.count - 1 -- reset count to just below limit
-				return 
-			end
-			minetest.chat_send_all("#SKYBLOCK: " .. name .. " completed '" .. data.description .. "' on level " .. level)
-			local diginv = digger:get_inventory(); local rewardstack = ItemStack(data.reward)
-			if diginv:room_for_item("craft", rewardstack) then
-				diginv:add_item("craft", rewardstack)  -- give reward to players craft inventory
-			else
-				minetest.add_item(pos,rewardstack) -- drop reward
-			end
-			pdata.completed = pdata.completed + 1 -- one more quest completed
-			if pdata.completed >= pdata.total then skyblock.quests[level].on_completed(name) end -- did we complete level?
-		end
-	end
-	
- end
- 
- -- track node dig: NOTE: some crazy minetest mods actually call on_dignode with nil digger! (like builtin/falling.lua)
- minetest.register_on_dignode( 
-	function(pos, oldnode, digger) if digger then track_quest(pos,oldnode.name, digger, "on_dignode") end end
- )
- 
--- track node place
-minetest.register_on_placenode( -- TODO: maybe check if we can really place node to prevent 'cloud place abuse' ?
-function(pos, newnode, placer, oldnode)	track_quest(pos,newnode.name, placer, "on_placenode") end
+    local pdata = skyblock.players[name]
+    if not pdata then
+        skyblock.players[name] = {
+            level = 1,
+            data = {},
+            completed = 0,
+        }
+        pdata = skyblock.players[name]
+    end
+
+    for _, quest_type in ipairs(skyblock.quest_types) do
+        pdata[quest_type] = nil
+    end
+
+    pdata.data = {}
+    pdata.completed = 0
+    pdata.level = level
+
+    local total = 0
+
+    for _, quest_type in ipairs(skyblock.quest_types) do
+        if skyblock.quests[level][quest_type] then
+            local quest_data = {}
+            for item, quest_info in pairs(skyblock.quests[level][quest_type]) do
+                quest_data[item] = 0
+                if not quest_info.hidden then
+                    total = total + 1
+                end
+            end
+            pdata[quest_type] = quest_data
+        end
+    end
+    
+    pdata.total = total
+end
+
+-- Track the quest progress
+local track_quest = function(pos, item, digger, quest_type)
+    local name = digger:get_player_name()
+    local pdata = skyblock.players[name]
+
+    if not pdata then return end
+
+    local level = pdata.level
+    if not skyblock.quests[level] or not skyblock.quests[level][quest_type] then return end
+
+    local quest_data = skyblock.quests[level][quest_type][item]
+    if not quest_data then return end
+
+    pdata[quest_type] = pdata[quest_type] or {}
+    pdata[quest_type][item] = pdata[quest_type][item] or 0
+
+    local count = pdata[quest_type][item]
+
+    if count < quest_data.count then
+        if quest_data.hidden then
+            if quest_data.on_progress and quest_data.on_progress(pdata.data) then
+                pdata[quest_type][item] = quest_data.count
+                return
+            end
+        end
+
+        count = count + 1
+        pdata[quest_type][item] = count
+
+        if quest_data.on_progress and quest_data.on_progress(pdata.data) then
+            count = quest_data.count
+        end
+
+        if count >= quest_data.count then
+            if quest_data.on_completed and not quest_data.on_completed(pos, name) then
+                pdata[quest_type][item] = quest_data.count - 1
+                return
+            end
+
+            minetest.chat_send_all("[Skyblock]: " .. name .. " completed '" .. quest_data.description .. "' on level " .. level)
+
+            local diginv = digger:get_inventory()
+            local rewardstack = ItemStack(quest_data.reward)
+            if diginv:room_for_item("craft", rewardstack) then
+                diginv:add_item("craft", rewardstack)
+            else
+                minetest.add_item(pos, rewardstack)
+            end
+
+            pdata.completed = pdata.completed + 1
+            if pdata.completed >= pdata.total then
+                skyblock.quests[level].on_completed(name)
+            end
+        end
+    end
+end
+
+-- Track when a player digs a block
+minetest.register_on_dignode(
+    function(pos, oldnode, digger)
+        if digger and digger:is_player() then
+            track_quest(pos, oldnode.name, digger, "on_dignode")
+        end
+    end
 )
 
--- track craft item
+-- Track when a player places a block
+minetest.register_on_placenode(
+    function(pos, newnode, placer, oldnode)
+        if placer and placer:is_player() then
+            track_quest(pos, newnode.name, placer, "on_placenode")
+        end
+    end
+)
+
+-- Track when a player crafts an item
 minetest.register_on_craft(
-function(itemstack, player, old_craft_grid, craft_inv)	track_quest(player:getpos(), itemstack:get_name(), player, "on_craft") end
+    function(itemstack, player, old_craft_grid, craft_inv)
+        if player and player:is_player() then
+            track_quest(player:get_pos(), itemstack:get_name(), player, "on_craft")
+        end
+    end
 )
- 
--- SAVING/LOADING DATA: player data, skyblock data
- 
- local function mkdir(path)
-	if minetest.mkdir then
-		minetest.mkdir(path)
-	else
-		os.execute('mkdir "' .. path .. '"')
-	end
+
+-- Saving and loading player/skyblock data
+local function mkdir(path)
+    if minetest.mkdir then
+        minetest.mkdir(path)
+    else
+        os.execute('mkdir "' .. path .. '"')
+    end
 end
- 
+
 local filepath = minetest.get_worldpath()..'/skyblock';
-mkdir(filepath) -- create if non existent
- 
+mkdir(filepath)
+
 function load_player_data(name)
-	local file,err = io.open(filepath..'/'..name, 'rb')
-	local pdata = {};
-	if not err then -- load from file
-		local pdatastring = file:read("*a");
-		file:close()
-		pdata = minetest.deserialize(pdatastring) or {};
-	else
-		print("#skyblock: problem loading player data for " .. name .. " from file")
-	end
-	
-	pdata.stats = pdata.stats or {};  -- init
-	pdata.stats.time_played = pdata.stats.time_played or 0
-	pdata.stats.last_login = minetest.get_gametime() -- update
-	skyblock.players[name] = pdata; 
+    local file, err = io.open(filepath .. '/' .. name, 'rb')
+    local pdata = {}
+    if not err then
+        local pdatastring = file:read("*a")
+        file:close()
+        pdata = minetest.deserialize(pdatastring) or {}
+    else
+        print('[Skyblock]: problem loading player data for ' .. name .. " from file")
+    end
 
-	-- verify data vs quest data definitions
-	local level = pdata.level; if not level then return end	
-	for k,v in pairs( skyblock.quests[level] ) do 
-		if quest_types[k] then
-			local w = pdata[k];	if not w then pdata[k] = {}; w = pdata[k] end
-			for k_,v_ in pairs(v) do
-				w[k_] = w[k_] or 0; -- if quests update define progress and set it to 0
-			end
-		end
-	end	
-	
-	return
-end 
- 
-function save_player_data(name)
-	local file,err = io.open(filepath..'/'..name, 'wb')
-	if err then return nil end
-	local pdata = skyblock.players[name];
-	if not pdata then return end
+    pdata.stats = pdata.stats or {}
+    pdata.stats.time_played = pdata.stats.time_played or 0
+    pdata.stats.last_login = minetest.get_gametime()
+    skyblock.players[name] = pdata
 
-	local t = minetest.get_gametime();
-	pdata.stats.time_played = pdata.stats.time_played + (t-pdata.stats.last_login) -- update total play time
-	local pdatastring = minetest.serialize(pdata)
-	file:write(pdatastring)
-	file:close()
+    local level = pdata.level
+    if not level or not skyblock.quests[level] then return end
+
+    for quest_type, quests in pairs(skyblock.quests[level]) do
+        if quest_types[quest_type] then
+            if not pdata[quest_type] then pdata[quest_type] = {} end
+            local qdata = pdata[quest_type]
+            for item, quest_info in pairs(quests) do
+                if not qdata[item] then qdata[item] = 0
+                end
+            end
+        end
+    end
+
+    return pdata
 end
 
-function save_data(is_shutdown) -- on shutdown save free island ids too
-	local file,err = io.open(filepath..'/_SKYBLOCK_', 'wb')
-	if err then return nil end
-	
-	local ids = skyblock.id_queue;
-	if is_shutdown then -- save all player data
-		for _,player in ipairs(minetest.get_connected_players()) do -- save connected players if their level enough
-			local name = player:get_player_name();
-			local pdata = skyblock.players[name] or {};
-			if pdata then
-				if pdata.level~=1 then -- save players
-					save_player_data(name)
-				else -- player was level 1, make id available again
-					ids[#ids+1] = pdata.id
-				end
-			end
-		end
-	end
-	
-	local pdatastring = minetest.serialize({skyblock.max_id,skyblock.id_queue})
-	file:write(pdatastring)
-	file:close()
+function save_player_data(name)
+    local file, err = io.open(filepath .. '/' .. name, 'wb')
+    if err then return nil end
+    local pdata = skyblock.players[name]
+    if not pdata then return end
+
+    local t = minetest.get_gametime()
+    pdata.stats.time_played = pdata.stats.time_played + (t - pdata.stats.last_login)
+    local pdatastring = minetest.serialize(pdata)
+    file:write(pdatastring)
+    file:close()
+end
+
+function save_data(is_shutdown)
+    local file, err = io.open(filepath .. '/_SKYBLOCK_', 'wb')
+    if err then return nil end
+
+    local ids = skyblock.id_queue
+    if is_shutdown then
+        for _, player in ipairs(minetest.get_connected_players()) do
+            local name = player:get_player_name()
+            local pdata = skyblock.players[name] or {}
+            if pdata then
+                if pdata.level ~= 1 then
+                    save_player_data(name)
+                else
+                    ids[#ids + 1] = pdata.id
+                end
+            end
+        end
+    end
+
+    local pdatastring = minetest.serialize({skyblock.max_id, skyblock.id_queue})
+    file:write(pdatastring)
+    file:close()
 end
 skyblock.save_data = save_data;
 
--- SKYBLOCK ISLAND MANAGEMENT
---[[
-	skyblock.max_id = -1; -- largest id in use so far - init
-	skyblock.id_queue = {}; -- available id's, when player who is not 'old' leaves, his id is put here, when new non-old player joins, he takes id from here. Player is 'old' if he reaches level 2
---]]
-
+-- Skyblock island management
 skyblock.max_id = -1;
 skyblock.id_queue = {};
 
 function load_data(name)
-	local file,err = io.open(filepath..'/_SKYBLOCK_', 'rb')
-	if err then return nil end
-	local pdatastring = file:read("*a");
-	file:close()
-	local data = minetest.deserialize(pdatastring) or {};
-	skyblock.max_id = data[1] or -1;
-	skyblock.id_queue = data[2] or {};
+    local file, err = io.open(filepath .. '/_SKYBLOCK_', 'rb')
+    if err then return nil end
+    local pdatastrin = file:read("*a")
+    file:close()
+    local data = minetest.deserialize(pdatastring) or {};
+    skyblock.max_id = data[1] or -1;
+    skyblock.id_queue = data[2] or {};
 end
 
-load_data(); -- when server starts
-minetest.register_on_shutdown(function() save_data(true) end) -- when server shuts down
+-- When server starts
+load_data()
 
--- MANAGE player data when connecting/leaving
-  
- minetest.register_on_joinplayer( -- LOAD data, init
-	function(player)
-		local name = player:get_player_name();
-		local pdata = skyblock.players[name];
-		if pdata then return end -- player already exists ingame, nothing to do
-		
-		load_player_data(name); -- attempt to load previous data
-		pdata = skyblock.players[name];
-		
-		if pdata.level then -- player already exists and is initialized
-			minetest.chat_send_all(minetest.colorize("LawnGreen","#SKYBLOCK: welcome back " .. name .. " from island " .. (pdata.id or "?")))
-			return
-		else -- init for new player
-			skyblock.init_level(name,1)
-			pdata = skyblock.players[name];
-			minetest.chat_send_player(name, "#SKYBLOCK: welcome to skyblock. Open inventory and check the quests.")
-		end
+-- When server shutsdown
+minetest.register_on_shutdown(function() save_data(true) end)
 
-		-- set island, set id for new player
-		local id = -1;
-		local ids = skyblock.id_queue;
-		
-		if #ids == 0 then -- out of free islands,make new island
-			skyblock.max_id = skyblock.max_id + 1 
-			id = skyblock.max_id;
-			
-			if id>=0 then 
-				local pos = skyblock.get_island_pos(id)
-				minetest.chat_send_all(minetest.colorize("LawnGreen","#SKYBLOCK: spawning new island " .. id .. " for " .. name .. " at " .. pos.x .. " " .. pos.y .. " " .. pos.z ))
-				pdata.id = id
-				skyblock.spawn_island(pos, name)
-				player:setpos({x=pos.x,y=pos.y+4,z=pos.z}) -- teleport player to island
-				
-			else
-				minetest.chat_send_all("#SKYBLOCK ERROR: skyblock.max_id is <0")
-				return
-			end
-		else 
-			id = ids[#ids]; ids[#ids] = nil; -- pop stack, reuse island
-			local pos = skyblock.get_island_pos(id)
-			minetest.chat_send_all(minetest.colorize("LawnGreen","#SKYBLOCK: reusing island " .. id .. " for " .. name .. " at " .. pos.x .. " " .. pos.y .. " " .. pos.z ))
-			pdata.id = id;
-			player:setpos({x=pos.x,y=pos.y+4,z=pos.z}) -- teleport player to island
-			
-			minetest.after(5, function() skyblock.delete_island(pos, true);skyblock.spawn_island(pos, name) end) -- check for trash and delete it
-		end
+-- Manage player data when joining
+minetest.register_on_joinplayer(
+    function(player)
+        local name = player:get_player_name()
+        local pdata = skyblock.players[name]
 
-	end
+        if pdata then return end
+        load_player_data(name)
+        pdata = skyblock.players[name]
+
+        if pdata.level then
+            minetest.chat_send_all(minetest.colorize("LawnGreen", "[Skyblock]: Welcome back " .. name .. " from island " .. (pdata.id or "?")))
+            return
+        else
+            skyblock.init_level(name, 1)
+            pdata = skyblock.players[name]
+            minetest.chat_send_player(name, "[Skyblock]: Welcome to Skyblock! Open your inventory and check the quests.")
+        end
+
+        local id = -1
+        local ids = skyblock.id_queue
+
+        if #ids == 0 then
+            skyblock.max_id = skyblock.max_id + 1
+            id = skyblock.max_id
+
+            if id >= 0 then
+                local pos = skyblock.get_island_pos(id)
+                minetest.chat_send_all(minetest.colorize("LawnGreen", "[Skyblock]: Spawning new island " .. id .. " for " .. name .. " at " .. pos.x .. ", " .. pos.y .. ", " .. pos.z))
+                pdata.id = id
+                skyblock.spawn_island(pos, name)
+                player:set_pos({ x = pos.x, y = pos.y + 4, z = pos.z })
+            else
+                minetest.chat_send_all("[Skyblock]: Error: skyblock.max_id is < 0")
+                return
+            end
+        else
+            id = ids[#ids]
+            ids[#ids] = nil
+            local pos = skyblock.get_island_pos(id)
+            minetest.chat_send_all(minetest.colorize("LawnGreen", "[Skyblock]: Reusing island " .. id .. " for " .. name .. " at " .. pos.x .. ", " .. pos.y .. ", " .. pos.z .. ", "))
+            pdata.id = id
+            player:set_pos({ x = pos.x, y = pos.y + 4, z = pos.z })
+
+            minetest.after(5, 
+            function() 
+                skyblock.delete_island(pos, true) 
+                skyblock.spawn_island(pos, name) 
+            end)
+        end
+    end
 )
 
---when level 1 player leave, put him on temporary list: [name] = {id, time}; 
---every 1 minute check the temporary list and really remove player (if not online again) and free island id
+-- Temporary island
 skyblock.temporary = {};
 
+-- Manage player data when leaving
 minetest.register_on_leaveplayer(
-	function(player, timed_out)
-		local name = player:get_player_name();
-		local pdata = skyblock.players[name];
-		
-		if pdata.level == 1 then 
-			skyblock.temporary[name]={pdata.id, minetest.get_gametime()};
-		else -- save data if player level >= 2!
-			save_player_data(name)
-			skyblock.players[name]=nil
-		end
-	end
+    function(plauer, timed_out)
+        local name = player:get_player_name()
+        local pdata = skyblock.players[name]
+
+        if not pdata then return end
+
+        if pdata.level == 1 then
+            skyblock.temporary[name] = { pdata.id, minetest.get_gametime() }
+        else
+            save_player_data(name)
+            skyblock.players[name] = nil
+        end
+    end
 )
 
--- RESPAWN PLAYERS BELOW THE BOUNDARY
-
+-- Respawning players if they go outside of the boundaries
 local respawn_player = function(player)
-		local name = player:get_player_name();
-		local pdata = skyblock.players[name];
-		
-		local pos = skyblock.get_island_pos(pdata.id);
-		if not pos then minetest.chat_send_all("#SKYBLOCK ERROR: spawnpos for " .. name .. " nonexistent") return end
-		
-		if pdata.level == 1 then 
-			skyblock.init_level(name,1)
-			if not minetest.find_node_near(pos, 5, "default:dirt") then
-				skyblock.spawn_island(pos, name)
-			end
-			skyblock.tutorial.change_text(name,"You died!\nYour quests have been reset.\nStart digging dirt again.")
-		end
-		pos.y=pos.y+4; player:setpos(pos) -- teleport player to island
+    local name = player:get_player_name()
+    local pdata = skyblock.players[name]
+    local pos = skyblock.get_island_pos(pdata.id)
+    if not pos then 
+        minetest.chat_send_all("[Skyblock]: Error: spawnpos for " .. name " nonexistent") 
+        return
+    end
+
+    if pdata.level == 1 then
+        skyblock.init_level(name, 1)
+
+        if not minetest.find_node_near(pos, 5, "default:dirt") then
+            skyblock.spawn_island(pos, name)
+        end
+
+        skyblock.tutorial.change_text(name, "You died!\nYour quests have been reset.\nStart digging dirt again to progress!")
+    end
+
+    pos.y = pos.y + 4
+    player:setpos(pos)
 end
 
-minetest.register_on_respawnplayer(function(player)
-	respawn_player(player)
-	return true -- disable regular player placement
-end)
-
-
-local timer = 0;
-local temptimer = 0;
-minetest.register_globalstep(
-	function(dtime)
-		timer = timer + dtime;
-		
-		if timer > 1 then
-			timer = 0
-			local t = minetest.get_gametime();
-			
-			local bottom = skyblock.bottom;
-			for _,player in ipairs(minetest.get_connected_players()) do -- MINETEST BUG: why huge lag if 'pairs' here?
-				if player:getpos().y < bottom then 
-					local name = player:get_player_name();
-					local pdata = skyblock.players[name];
-					if pdata and t-pdata.stats.last_login>10 then -- only reset inventory if player online for more than 10s to prevent spawn kills when falling through unloaded island
-						player:get_inventory():set_list("main",{}) -- empty inventory
-						player:get_inventory():set_list("craft",{})
-					end
-					respawn_player(player)
-				end
-			end
-			
-			temptimer = temptimer + 1 -- remove all level 1 players who are offline for more than 1 minute
-			if temptimer>60 then
-				temptimer = 0;
-				for name,tdata in pairs(skyblock.temporary) do -- temporary list: [name] = {id, time}
-					if t-tdata[2]>90 then -- more than 90s passed, if player not online clear his data and free island
-						local player = minetest.get_player_by_name(name);
-						if not player then
-							local ids = skyblock.id_queue;ids[#ids+1] = tdata[1]; -- free island,new players id is recycled, player must be level >=2 to keep his island
-							skyblock.players[name]=nil -- clear quest data
-							minetest.chat_send_all("#SKYBLOCK: " .. name .. "'s island recycled.")
-						end
-						skyblock.temporary[name] = nil; -- possible problem: does this corrupt pairs iterator?
-					end
-				end
-			end
-		
-		
-		
-		end
-	end
+minetest.register_on_respawnplayer(
+    function(player)
+        respawn_player(player)
+        return true
+    end
 )
 
--- GUI STUFF using sfinv ---
+local timer = 0
+local temptimer = 0
 
- local get_quest_form = function(name) -- quest gui formspec
+minetest.register_globalstep(
+    function(dtime)
+        timer = timer + dtime
+        if timer > 1 then
+            timer = 0
+            local current_time  minetest.get_gametime()
+            local bottom = skyblock.bottom
+
+            for _, player in ipairs(minetest.get_connected_players()) do
+                local pos = player:getpos()
+                if pos.y < bottom then
+                    local name player:get_player_name()
+                    local pdata = skyblock.players[name]
+
+                    if pdata and current_time - pdata.stats.last_login > 10 then
+                        player:get_inventory():set_list("main", {})
+                        player:get_inventory():set_list("craft", {})
+                    end
+
+                    respawn_player(player)
+                end
+            end
+
+            temptimer = temptimer + 1
+            if temptimer > 60 then
+                temptimer = 0
+
+                for name, tdata in pairs(skyblock.temporary) do
+                    if current_time - tdata[2] > 90 then
+                        local player = minetest.get_player_by_name(name)
+                        if not player then
+                            local ids = skyblock.id_queue
+                            ids[#ids + 1] = tdata[1]
+
+                            skyblock.players[name] = nil
+                            minetest.chat_send_all("[Skyblock]: " .. name .. "'s island has been recycled.")
+                        end
+
+                        skyblock.temporary[name] = nil
+                    end
+                end
+            end
+        end
+    end
+)
+
+-- GUI STUFF using sfinv
+local get_quest_form = function(name) -- quest gui formspec
 	local pdata = skyblock.players[name];
 	if not pdata then return end
 	local level = pdata.level;
@@ -350,7 +394,7 @@ minetest.register_globalstep(
 	
 	local form  = 
 		"size[8,8]"..
-		"label[0,0;".. minetest.colorize("orange","SKYBLOCK QUESTS - LEVEL " .. level .. "]")..
+		"label[0,0;".. minetest.colorize("yellow","SKYBLOCK QUESTS - LEVEL " .. level .. "]")..
 		"label[-0.25,0.5;________________________________________________________________________________]";
 	local y = 0;
 	for qtype,quest in pairs(skyblock.quests[level]) do
@@ -372,9 +416,9 @@ minetest.register_globalstep(
 					local tcount = qdef.count or -1;
 					local desc = qdef.description or "ERROR!";
 					if count>=tcount then 
-						desc = minetest.colorize("Green", desc) 
+						desc = minetest.colorize("aqua", desc) 
 					--else 
-						--desc = minetest.colorize("Orange", desc) 
+						--desc = minetest.colorize("Yellow", desc) 
 					end
 					
 					form = form .. 
@@ -385,12 +429,10 @@ minetest.register_globalstep(
 			end
 		end
 	end
-
 	return form
- 	
 end
 
- local get_stats_form = function(name) -- quest gui formspec
+local get_stats_form = function(name)
 	local pdata = skyblock.players[name];
 	if not pdata then return end
 	local stats = pdata.stats;
@@ -400,71 +442,66 @@ end
 	t=t-t_[1]*3600-t_[2]*60;
 	local form  = 
 		"size[8,8]"..
-		"label[0,0..;".. minetest.colorize("orange","STATISTICS for " .. name) .. "]"..
+		"label[0,0..;".. minetest.colorize("yellow","STATISTICS for " .. name) .. "]"..
 		"label[-0.25,0.5;________________________________________________________________________________]"..
 		"label[0,1.;".."play time        : " ..  t_[1] .. " hour " .. t_[2] .. " min " .. t .. "s]"..
 		"label[0,1.5;"..   "blocks digged : " ..  (stats.on_dignode or 0) .. "]" ..
 		"label[0,2;".. "blocks placed : " ..  (stats.on_placenode or 0) .. "]" ..
 		"label[0,2.5;"..   "items crafted  : " ..  (stats.on_craft or 0) .. "]"
- return form
+    return form
  end
 
-
--- add gui tab using sfinv
-if sfinv then
+ if sfinv then
 	sfinv.register_page("sfinv:skyblock", {
 		title = "Quests",
 		get = function(self, player, context)
-			
 			local content = get_quest_form(player:get_player_name());
-			
-			local tmp = {
-			"size[8,8.6]",
-			"bgcolor[#080808BB;true]" .. default.gui_bg .. default.gui_bg_img,
-			sfinv.get_nav_fs(player, context, context.nav_titles, context.nav_idx),
-			content,
-			"button[6,0.;2,1;skyblock_update;REFRESH]"
-			}
-			return table.concat(tmp, "")
-		end,
-		
+
+            local tmp = {
+                "size[8,8.6]",
+                "bgcolor[#090909BB;true]" .. default.gui_bg .. default.gui_bg_img,
+                sfinv.get_nav_fs(player, context, context.nav_titles, context.nav_idx),
+                content,
+                "button[6,0.;2,1;skyblock_update;REFRESH]"
+            }
+            return table.concat(tmp, "")
+        end,
 		on_player_receive_fields = function(self, player, context, fields)
-		if fields.skyblock_update then -- refresh
-			local fs = sfinv.get_formspec(player,
-				context or sfinv.get_or_create_context(player))
-			player:set_inventory_formspec(fs)
-		end
-	end,
+			if fields.skyblock_update then 
+				local fs = sfinv.get_formspec(player, context or sfinv.get_or_create_context(player))
+				player:set_inventory_formspec(fs)
+			end
+		end,
 	})
-	
+
 	sfinv.register_page("sfinv:skystats", {
 		title = "Stats",
 		get = function(self, player, context)
-			
-			local content = get_stats_form(player:get_player_name()); 
-		
-			local tmp = {
-			"size[8,8.6]",
-			"bgcolor[#080808BB;true]" .. default.gui_bg .. default.gui_bg_img,
-			sfinv.get_nav_fs(player, context, context.nav_titles, context.nav_idx),
-			content,
-			"button[6,0.;2,1;skystats_update;REFRESH]"
-			}
-			return table.concat(tmp, "")
+			local name = player:get_player_name()
+			local content = get_stats_form(name) or "label[0,0;No stats available.]"
+
+			local formspec = table.concat({
+				"size[8,8.6]",
+				"bgcolor[#080808BB;true]" .. default.gui_bg .. default.gui_bg_img,
+				sfinv.get_nav_fs(player, context, context.nav_titles, context.nav_idx),
+				content,
+				"button[6,0.;2,1;skystats_update;REFRESH]"
+			}, "")
+
+			return formspec
 		end,
-		
 		on_player_receive_fields = function(self, player, context, fields)
-		if fields.skystats_update then -- refresh
-			local fs = sfinv.get_formspec(player,
-				context or sfinv.get_or_create_context(player))
-			player:set_inventory_formspec(fs)
-		end
-	end,
+			if fields.skystats_update then 
+				local fs = sfinv.get_formspec(player, context or sfinv.get_or_create_context(player))
+				player:set_inventory_formspec(fs)
+			end
+		end,
 	})
 end
 
- 
- minetest.register_chatcommand('quest', {
+
+-- Commands for quests/stats
+minetest.register_chatcommand('quest', {
 	description = 'Show quests for current level',
 	privs = {},
 	params = "",
@@ -483,11 +520,20 @@ minetest.register_chatcommand('stats', {
 	privs = {},
 	params = "",
 	func = function(name, param)
-		if param and param~= "" then
+		if param and param ~= "" then
 			local form = get_stats_form(param);
-			if form then minetest.show_formspec(name, "skyblock_stats",form) end
+			if form then
+				minetest.show_formspec(name, "skyblock_stats", form)
+			else
+				minetest.chat_send_player(name, "No stats found for " .. param)
+			end
 		else
-			minetest.show_formspec(name, "skyblock_stats",get_stats_form(name))
+			local form = get_stats_form(name);
+			if form then
+				minetest.show_formspec(name, "skyblock_stats", form)
+			else
+				minetest.chat_send_player(name, "No stats found for " .. name)
+			end
 		end
 	end,
 })
