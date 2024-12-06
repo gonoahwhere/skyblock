@@ -1,318 +1,577 @@
+-- Ensure the quests table is initialized
 skyblock.quests = {}
 
-skyblock.quests[1] = { -- level 1
-	on_dignode = {
-		["default:dirt"]={reward = "default:leaves 6", count=1, description = "dig 1 dirt"},
-		["default:tree"]={reward = "default:water_source", count=16, description = "dig 16 tree",
-			on_completed = function(pos,name) 
-				skyblock.tutorial.change_text(name,"Keep making more composters and more dirt.\nKeep water for later.")
-				return true
-			end
-		
-		} 
-	},
-	
-	on_placenode = {
-		["default:dirt"]={reward = "default:stick 5", count=1, description = "place 1 dirt",
-			on_completed = function(pos,name) 
-				skyblock.tutorial.change_text(name,"You can make tree sapling now, open craft guide and search\nfor sapling recipe ( right one ).Plant tree, wait 1 minute\nand make more saplings from leaves.")
-				return true
-			end
-		} 
-	},
-	
-	on_craft = {
-		["compost:wood_barrel"]={reward = "default:lava_source", count=16, description = "hold 32 dirt in hand and craft 16 composters",
-		on_completed = function(pos,name) 
-			local player = minetest.get_player_by_name(name);
-			local inv = player:get_inventory();
-			if not inv:contains_item("main",ItemStack("default:dirt 32")) then
-				minetest.chat_send_player(name,"#SKYBLOCK: you need to have 32 dirt in inventory to complete this quest! Try again.")
-				return false
-			end
-			minetest.chat_send_player(name,
-			"#SKYBLOCK: if water meets flowing lava it will create pumice. Mix 8 pumice and 1 dirt to get 1 gravel, later you can mix 1 pumice and 1 gravel to make 2 gravel. Craft 1 cobble from 8 gravel, later smelt 1 gravel to make 1 cobble.\n"..
-			minetest.colorize("red","IMPORTANT! keep water away from lava source!"))
-			skyblock.tutorial.change_text(name,"Place lava (AWAY FROM WATER!) and make your\nown pumice generator. You can dig pumice with wooden\npick and use it to make stone (search craft guide)")
-			return true
-		end
-		},
-		["default:furnace"]={reward = "default:axe_steel", count=4, description = "craft 4 furnace",
-			on_completed = function(pos,name) 
-				skyblock.tutorial.change_text(name,"")
-				return true
-			end
-		},
-		["default:sapling"]={reward = "default:axe_wood", count=5, description = "craft 5 saplings",
-			on_completed = function(pos,name) 
-				minetest.chat_send_player(name,"#SKYBLOCK: you can craft 'composter' from wood planks and use it to make more dirt. Look in craft guide for craft recipe.")
-				skyblock.tutorial.change_text(name,"Use axe to cut tree and get wood.\nFrom wood you can craft composter and use it with leaves\nto make more dirt for your island.")
-				return true
-			end
-		}
-	},
-	
-	on_completed = function(name) -- what to do when level completed?
-		minetest.chat_send_all("#SKYBLOCK: " .. name .. " completed level 1 !" )
-		
-		local player = minetest.get_player_by_name(name);
-		local inv = player:get_inventory();
-		inv:add_item("craft",ItemStack("basic_protect:protector")) 
-		minetest.chat_send_player(name,"#SKYBLOCK: congratulations! you get protector as reward. When you place it it goes 4 blocks below center of your island.")
-		
-		skyblock.init_level(name,2); -- start level 2
-		
-		local pdata = skyblock.players[name];
-		local id = pdata.id; local pos = skyblock.get_island_pos(id); local meta = minetest.get_meta(pos);
-		meta:set_string("infotext","ISLAND " .. id .. ": " .. name) -- ITS PLAYERS ISLAND NOW
-		
-		skyblock.save_data(false) --save id_queue data so that this players island is safe even if crash
-	end,
+-- Helper function for inventory check
+local function has_required_items(player_name, item, count)
+    local player = minetest.get_player_by_name(player_name)
+    if not player then return false end
+
+    local inv = player:get_inventory()
+    if not inv:contains_item("main", ItemStack(item .. " " .. count)) then
+        minetest.chat_send_player(player_name, "[Skyblock]: You need " .. count .. " " .. item .. " in your inventory. Try again!")
+        return false
+    end
+    return true
+end
+
+-- Helper function for tutorial messages (specific to level 1)
+local function send_tutorial_message(player_name, text)
+    local pdata = skyblock.players[player_name]
+    if pdata and pdata.level == 1 then
+        skyblock.tutorial.change_text(player_name, text)
+    end
+end
+
+-- Generalized quest completion logic
+local function register_quest(quest_type, item, quest_data, level)
+    -- Ensure the level and quest_type tables exist
+    if not skyblock.quests[level] then
+        skyblock.quests[level] = {
+            on_dignode = {},
+            on_placenode = {},
+            on_craft = {},
+        }
+    end
+
+    if not skyblock.quests[level][quest_type] then
+        skyblock.quests[level][quest_type] = {}
+    end
+
+    -- Register the quest data for the specific item
+    skyblock.quests[level][quest_type][item] = {
+        reward = quest_data.reward,
+        count = quest_data.count,
+        description = quest_data.description,
+        on_completed = quest_data.on_completed or function(pos, name)
+            -- Ensure the default completion logic is correct
+            if quest_data.inventory_requirement and not has_required_items(name, item, quest_data.inventory_requirement) then
+                return false
+            end
+            if quest_data.tutorial_message then
+                send_tutorial_message(name, quest_data.tutorial_message)
+            end
+            return true
+        end,
+    }
+end
+
+
+-- Define quests for level 1
+skyblock.quests[1] = {
+    on_dignode = {},
+    on_placenode = {},
+    on_craft = {},
+
+    -- Level completion logic
+    on_completed = function(name)
+        minetest.chat_send_all("[Skyblock]: " .. name .. " completed level 1!")
+        
+        local player = minetest.get_player_by_name(name)
+        local inv = player:get_inventory()
+        inv:add_item("craft", ItemStack("basic_protect:protector"))
+        minetest.chat_send_player(name, "[Skyblock]: Congratulations on completing level 1! You have received a protector as a reward. When you place it, it goes 4 blocks below the centre of your island.")
+        
+        skyblock.init_level(name, 2) -- Start level 2
+
+        local pdata = skyblock.players[name]
+        local id = pdata.id
+        local pos = skyblock.get_island_pos(id)
+        local meta = minetest.get_meta(pos)
+        meta:set_string("infotext", "ISLAND " .. id .. ": " .. name) -- This island now belongs to the player
+
+        skyblock.save_data(false) -- Adds island ID to a queue so that the island saves.
+    end,
 }
- 
- 
- skyblock.quests[2] = {
-	on_placenode = {
-		["default:stone"]={reward = "default:iron_lump", count=100, description = "place 100 stone"} ,
-		["default:dirt"]={reward = "default:papyrus", count=1, description = "place 1 dirt after you digged 100 dirt",
-			on_completed = function(pos,name) 
-				local player = minetest.get_player_by_name(name);
-				local pdata = skyblock.players[name];
-				local step = pdata["on_dignode"]["default:dirt"];
-				if step<100 and step>10 then  -- so allow up to 10 dig dirts abuses before complaining
-					pdata["on_dignode"]["default:dirt"] = 0 
-					minetest.chat_send_player(name,"#SKYBLOCK: nice try - what you think this is? dumb skyblock? your dig dirt quest has been resetted, you noob.")
-					return false 
-				elseif step<100 then 
-					return false
-				end
-				minetest.chat_send_player(name,"#SKYBLOCK: plant papyrus on dirt 3 blocks near water to grow more.")
-				return true
-			end
-		} 
-	},
-	
-	on_dignode = {
-		["basic_protect:protector"] = {reward = "default:pick_steel", count=1, description = "place and dig protector"} ,
-		["default:jungletree"]={reward = "default:stone_with_copper", count=100, description = "dig 100 jungle tree"},
-		["default:dirt"]={reward = "default:coal_lump", count=100, description = "produce and dig 100 dirt without placing it",
-			on_completed = function(pos,name) 
-				minetest.chat_send_player(name,"#SKYBLOCK: To make more coal first craft stone_with_coal and then smelt it.")
-				return true
-			end
-		},
-	},
-	
-	on_craft = {
-		["default:stone_with_coal"]={reward = "basic_robot:spawner", count=50, description = "craft 100 stone with coal",
-			on_completed = function(pos,name) 
-				minetest.chat_send_player(name,"#SKYBLOCK: You can use robot to automate your tasks ( requires programming skills). Or you can use alchemy lab.")
-				local player = minetest.get_player_by_name(name);
-				local inv = player:get_inventory();
-				inv:add_item("craft",ItemStack("alchemy:lab")) 
-				return true
-			end
-		
-		},
-		["basic_machines:iron_dust_00"]={reward = "default:jungleleaves 6", count=50, description = "craft 100 iron dust"},
-	},
-	
-	on_completed = function(name) -- what to do when level completed?
-		minetest.chat_send_all("#SKYBLOCK: " .. name .. " completed level 2 !" )
-		
-		local player = minetest.get_player_by_name(name);
-		local inv = player:get_inventory();
-		inv:add_item("craft",ItemStack("default:water_source")) 
-		minetest.chat_send_player(name,"#SKYBLOCK: congratulations! you get another water source as reward. place it diagonally to another water to make infinite water source.")
-		local privs = core.get_player_privs(name); privs.fast = true; privs.robot = true; core.set_player_privs(name, privs); minetest.auth_reload()
-		minetest.chat_send_player(name,"#SKYBLOCK: you got fast and robot privs (you can use up to 4 robots) as reward!")
-		skyblock.init_level(name,3); -- start level 3
-	end,
- }
- 
- 
+
+-- Register quests for level 1 with tutorial messages
+register_quest("on_dignode", "default:dirt", {
+    reward = "default:leaves 6",
+    count = 1,
+    description = "Dig 1 dirt",
+    tutorial_message = "You can craft tree saplings now. Open the craft guide and search for the sapling recipe. Plant trees, wait a minute, and make more saplings from leaves."
+}, 1)
+
+register_quest("on_dignode", "default:tree", {
+    reward = "default:water_source",
+    count = 16,
+    description = "Dig 16 trees",
+    tutorial_message = "Keep making more composters and more dirt.\nKeep water for later."
+}, 1)
+
+register_quest("on_placenode", "default:dirt", {
+    reward = "default:stick 5",
+    count = 1,
+    description = "Place 1 dirt",
+    tutorial_message = "Use dirt to grow trees. You can craft a composter using wood planks to make more dirt."
+}, 1)
+
+register_quest("on_craft", "compost:wood_barrel", {
+    reward = "default:lava_source",
+    count = 16,
+    description = "Hold 32 dirt in hand and craft 16 composters",
+    tutorial_message = "Lava and flowing water create pumice. Use pumice to craft gravel and stone. Keep water away from lava sources!",
+    on_completed = function(pos, name)
+        -- Check if the player has 32 dirt in their inventory
+        if not has_required_items(name, "default:dirt", 32) then
+            return false
+        end
+        return true
+    end,
+}, 1)
+
+register_quest("on_craft", "default:sapling", {
+    reward = "default:axe_wood",
+    count = 5,
+    description = "Craft 5 saplings",
+    tutorial_message = "Use axes to cut trees and gather wood. Craft composters to make more dirt for expanding your island."
+}, 1)
+
+register_quest("on_craft", "default:furnace", {
+    reward = "default:axe_steel",
+    count = 4,
+    description = "Craft 4 furnaces",
+}, 1)
+
+-- Define quests for level 2
+skyblock.quests[2] = {
+    on_dignode = {},
+    on_placenode = {},
+    on_craft = {},
+
+    on_completed = function(name)
+        minetest.chat_send_all("[Skyblock]: " .. name .. " completed level 2!")
+
+        local player = minetest.get_player_by_name(name)
+        local inv = players:get_inventory()
+        inv:add_item("craft", ItemStack("default:water_source"))
+        minetest.chat_send_player(name, "[Skyblock]: Congratulations on completing level 2! You have received another water source as a reward. Place it diagonally to another water to make an infinite water source.")
+
+        skyblock.init_level(name, 3) -- Start level 3
+
+        local privs = core.get_player_privs(name)
+        privs.fast = true
+        privs.robot = true
+        core.set_player_privs(name, privs)
+        minetest.auth_reload()
+        minetest.chat_send_player(name, "[Skyblock]: You now have fast and robot privs (up to 6 robots) as a reward!")
+    end,
+}
+
+-- Register quests for level 2
+register_quest("on_placenode", "default:stone", {
+    reward = "default:iron_lump",
+    count = 100,
+    description = "Place 100 stone"
+}, 2)
+
+register_quest("on_placenode", "default:dirt", {
+    reward = "default:papyrus",
+    count = 1,
+    description = "Place 1 dirt after you dug 100 dirt",
+    on_completed = function(pos, name)
+        local player = minetest.get_player_by_name(name)
+        local pdata = skyblock.players[name]
+        local step = pdata["on_dignode"]["default:dirt"]
+
+        if step < 100 and step > 10 then -- Allow up to 10 dirt digs before warning
+            pdata["on_dignode"]["default:dirt"] = 0
+            minetest.chat_send_player(name, "[Skyblock]: Nice try - what do you think this is? Your dig dirt quest has been reset.")
+            return false
+        elseif step < 100 then
+            return false
+        end
+        minetest.chat_send_player(name, "[Skyblock]: Plant papyrus on dirt or sand, 3 blocks near water to grow more.")
+        return true
+    end,
+}, 2)
+
+register_quest("on_dignode", "basic_protect:protector", {
+    reward = "default:pick_steel",
+    count = 1,
+    description = "Place and dig a protector"
+}, 2)
+
+register_quest("on_dignode", "default:jungletree", {
+    reward = "default:stone_with_copper",
+    count = 100,
+    description = "Dig 100 jungletree"
+}, 2)
+
+register_quest("on_dignode", "default:dirt", {
+    reward = "default:coal_lump",
+    count = 100,
+    description = "Dig 100 dirt without placing it",
+    on_completed = function(pos, name)
+        minetest.chat_send_player(name, "[Skyblock]: To make more coal, first craft stone_with_coal and then smelt it.")
+        return true
+    end,
+}, 2)
+
+register_quest("on_craft", "default:stone_with_coal", {
+    reward = "basic_robot:spawner",
+    count = 50,
+    description = "Craft 100 stone with coal",
+    on_completed = function(pos, name)
+        minetest.chat_send_player(name, "[Skyblock]: You can use robots to automate tasks (programming skills required) or use the alchemy lab.")
+        local player = minetest.get_player_by_name(name)
+        local inv = player:get_inventory()
+        inv:add_item("craft", ItemStack("alchemy:lab"))
+        return true
+    end,
+}, 2)
+
+register_quest("on_craft", "basic_machines:iron_dust_00", {
+    reward = "default:jungleleaves 6",
+    count = 50,
+    description = "Craft 100 iron dust"
+}, 2)
+
+-- Define quests for level 3
 skyblock.quests[3] = {
-	
-	on_craft = {
-		["default:bookshelf"]={reward = "farming:rhubarb_3 3", count=10, description = "craft 10 bookshelves",
-		on_completed = function(pos,name)
-				minetest.chat_send_player(name,	minetest.colorize("orange", "#SKYBLOCK: FARMING: place rhubarb seed on matured composter. Be careful to insert fertilizer in composter first. Fix any weeds while growing by punching them before 5 minutes elapse."))
-				return true
-			end,
-		},
-		["farming:rhubarb_pie"]={reward = "default:diamond", count=10, description = "bake 10 Rhubarb pie"},
-		["default:brick"]={reward = "moreores:mineral_silver", count=100, description = "craft 100 Brick"},
-		["basic_machines:copper_dust_00"]={reward = "default:gold_lump", count=50, description = "craft 100 copper dust"},
-		["basic_machines:mese_dust_00"]={reward = "default:grass_1", count=25, description = "craft 50 mese dust",
-			on_completed = function(pos,name)
-				minetest.chat_send_player(name,"#SKYBLOCK: place grass on dirt and wait. You will get green dirt which will spread around and slowly grow more grass and flowers. You can get seeds by digging grass.")
-				return true
-			end,
-		},
-	},
-	
-	on_placenode = {
-		["basic_machines:battery_0"]={reward = "basic_machines:grinder", count=1, description = "place battery"},
-		["darkage:silt"]={reward = "moreores:mineral_mithril", count=1, description = "place 1 silt while having 100 silt in inventory",
-			on_completed = function(pos,name) 
-				local player = minetest.get_player_by_name(name);
-				local inv = player:get_inventory();
-				
-				if not inv:contains_item("main",ItemStack("darkage:silt 100")) then
-					minetest.chat_send_player(name,"#SKYBLOCK: you need to have 100 silt blocks in inventory. Try again!")
-					return false 
-				end
-				return true
-			end
-		},
-		
-		["default:mossycobble"]={reward = "moreores:mineral_tin", count=1, description = "place 1 Mossy Cobblestone while having 100 Mossy Cobblestone in inventory",
-			on_completed = function(pos,name) 
-				local player = minetest.get_player_by_name(name);
-				local inv = player:get_inventory();
-				
-				if not inv:contains_item("main",ItemStack("default:mossycobble 100")) then
-					minetest.chat_send_player(name,"#SKYBLOCK: you need to have 100 mossy cobblestone blocks in inventory. Try again!")
-					return false 
-				end
-				return true
-			end
-		},
-		
-		["default:steelblock"]={reward = "farming:cocoa_beans 9", count=1, description = "place 1 steelblock while having 4 steelblocks in inventory",
-			on_completed = function(pos,name) 
-				local player = minetest.get_player_by_name(name);
-				local inv = player:get_inventory();
-				
-				if not inv:contains_item("main",ItemStack("default:steelblock 4")) then
-					minetest.chat_send_player(name,"#SKYBLOCK: you need to have 4 steel blocks in inventory. Try again!")
-					return false 
-				end
-				return true
-			end
-		},
-		["default:goldblock"]={reward = "default:mese_crystal", count=1, description = "place 1 goldblock while having 4 goldblocks in inventory",
-			on_completed = function(pos,name) 
-				local player = minetest.get_player_by_name(name);
-				local inv = player:get_inventory();
-				
-				if not inv:contains_item("main",ItemStack("default:goldblock 4")) then
-					minetest.chat_send_player(name,"#SKYBLOCK: you need to have 4 gold blocks in inventory. Try again!")
-					return false 
-				end
-				return true
-			end
-		},
-	},
-	
-	on_completed = function(name) -- what to do when level completed?
-		minetest.chat_send_all("#SKYBLOCK: " .. name .. " completed level 3 !" )
-		skyblock.init_level(name,4); -- start level 4
-	end,
- }
+    on_dignode = {},
+    on_placenode = {},
+    on_craft = {},
 
- 
- skyblock.quests[4] = {
-	on_placenode = {
-		["basic_machines:mover"]={reward = "farming:corn", count=1, description = "place mover"},
-		["basic_machines:generator"]={reward = "farming:grapes", count=1, description = "place generator"},
-		["basic_machines:clockgen"]={reward = "farming:blueberries", count=1, description = "place clock generator"},
-		["basic_machines:autocrafter"]={reward = "farming:beans", count=1, description = "place autocrafter"},
-		["basic_machines:enviro"]={reward = "farming:tomato", count=1, description = "place enviroment block"},
-		["default:diamondblock"]={reward = "", count=1, description = "place 1 diamondblock while having 3167 diamondblocks in inventory",
-			on_completed = function(pos,name) 
-				local player = minetest.get_player_by_name(name);
-				local inv = player:get_inventory();
-				
-				if not inv:contains_item("main",ItemStack("default:diamondblock 3167")) then
-					minetest.chat_send_player(name,"#SKYBLOCK: you need to have 3167 diamond blocks in inventory. Try again!")
-					return false 
-				end
-				return true
-			end
-		},
-		
-		["default:mese"]={reward = "", count=1, description = "place 1 meseblock while having 1000 mese blocks in inventory",
-			on_completed = function(pos,name) 
-				local player = minetest.get_player_by_name(name);
-				local inv = player:get_inventory();
-				
-				if not inv:contains_item("main",ItemStack("default:mese 1000")) then
-					minetest.chat_send_player(name,"#SKYBLOCK: you need to have 1000 mese blocks in inventory. Try again!")
-					return false 
-				end
-				return true
-			end
-		},
-		
-		["default:goldblock"]={reward = "", count=1, description = "place 1 goldblock while having 1000 gold blocks in inventory",
-			on_completed = function(pos,name) 
-				local player = minetest.get_player_by_name(name);
-				local inv = player:get_inventory();
-				
-				if not inv:contains_item("main",ItemStack("default:goldblock 1000")) then
-					minetest.chat_send_player(name,"#SKYBLOCK: you need to have 1000 gold blocks in inventory. Try again!")
-					return false 
-				end
-				return true
-			end
-		},
-	},
-	on_craft = {
-		["basic_robot:spawner"]={reward = "farming:cocoa_beans", count=1, description = "craft robot spawner"},
-	},
-	
-	on_completed = function(name) -- what to do when level completed?
-		minetest.chat_send_all("#SKYBLOCK: " .. name .. " completed level 4 !" )
-		local privs = core.get_player_privs(name); privs.puzzle = true; core.set_player_privs(name, privs); minetest.auth_reload()
-		minetest.chat_send_player(name,"#SKYBLOCK: you got puzzle privs as reward! You can make your own robot games now and more.")
-		skyblock.init_level(name,5); -- start level 5
-	end,
+    on_completed = function(name)
+        minetest.chat_send_all("[Skyblock]: " .. name .. " completed level 3!")
+
+        skyblock.init_level(name, 4) -- Start level 4
+    end,
 }
 
-skyblock.quests[5] = {}
- 
- 
+-- Register quests for level 3
+register_quest("on_craft", "default:bookshelf", {
+    reward = "farming:rhubarb_3 3",
+    count = 10,
+    description = "Craft 10 bookshelves",
+    on_completed = function(pos, name)
+        minetest.chat_send_player(name, "[Skyblock]: Place rhubarb seed on a matured composter. Be sure to insert fertilizer first. Fix any weeds by punching them before 5 minutes elapse.")
+        return true
+    end,
+}, 3)
 
---ideas: level 5: place generator in space
--- quest: get to ocean below and place block there ( move islands 500 up first)
--- to get past clouds you need to have 5 enviroment blocks in inventory! ( this allows to go through area 100-500)
--- below clouds only players with level >=5 have interact
--- reach -500 depth in ocean ( there is pressure damage in water)
--- add special ingredients you can extract from plants using 'extractor' that can help to produce more metal ores
+register_quest("on_craft", "farming:rhubarb_pie", {
+    reward = "default:diamond",
+    count = 50,
+    description = "Craft 10 rhubarb pies"
+}, 3)
 
- 
-skyblock.quest_types = {on_dignode = true, on_placenode = true, on_craft = true}; -- supported quest types
- 
- --[[
- 
-DETAILED INSTRUCTIONS:
+register_quest("on_craft", "default:brick", {
+    reward = "moreores:mineral_silver",
+    count = 100,
+    description = "Craft 100 bricks"
+}, 3)
 
-quest table structure:
-skyblock.quests = {
-	
-	quest_type = 
-	{
-		[item] = 
-		{
-			{
-				reward = ...,
-				count = how many, 
-				description = ..., 
-				on_completed = extra checks and actions before complete, return true to complete quest
-			}
-		},
-	},
+register_quest("on_craft", "basic_machines:copper_dust_00", {
+    reward = "default:gold_lump",
+    count = 50,
+    description = "Craft 100 copper dust"
+}, 3)
+
+register_quest("on_craft", "basic_machines:mese_dust_00", {
+    reward = "default:grass_1",
+    count = 25,
+    description = "Craft 50 mese dust",
+    on_completed = function(pos, name)
+        minetest.chat_send_player(name, "[Skyblock]: Place grass on dirt and wait. It will turn into green dirt, which will spread and grow more grass and flowers. You can get seeds by digging grass.")
+        return true
+    end,
+}, 3)
+
+register_quest("on_placenode", "basic_machines:battery_0", {
+    reward = "basic_machines:grinder",
+    count = 1,
+    description = "Place a battery"
+}, 3)
+
+register_quest("on_placenode", "darkage:silt", {
+    reward = "moreores:mineral_mithril",
+    count = 1,
+    description = "Place 1 silt while having 100 silt in your inventory",
+    on_completed = function(pos, name)
+        local player = minetest.get_player_by_name(name)
+        local inv = player:get_inventory()
+
+        if not inv:contains_item("main", ItemStack("darkage:silt 100")) then
+            minetest.chat_send_player(player_name, "[Skyblock]: You need 100 silt blocks in your inventory. Try again!")
+            return false
+        end
+        return true
+    end,
+}, 3)
+
+register_quest("on_placenode", "default:mossycobble", {
+    reward = "moreores:mineral_tin",
+    count = 1,
+    description = "Place 1 mossy cobble while having 100 mossy cobble in your inventory",
+    on_completed = function(pos, name)
+        local player = minetest.get_player_by_name(name)
+        local inv = player:get_inventory()
+
+        if not inv:contains_item("main", ItemStack("default:mossycobble 100")) then
+            minetest.chat_send_player(name, "[Skyblock]: You need 100 mossy cobble blocks in your inventory. Try again!")
+            return false
+        end
+        return true
+    end,
+}, 3)
+
+register_quest("on_placenode", "default:steelblock", {
+    reward = "farming:cocoa_beans 9",
+    count = 1,
+    description = "Place 1 steel block while having 4 steel blocks in your inventory",
+    on_completed = function(pos, name)
+        local player = minetest.get_player_by_name(name)
+        local inv = player:get_inventory()
+
+        if not inv:contains_item("main", ItemStack("default:steelblock 4")) then
+            minetest.chat_send_player(name, "[Skyblock]: You need 4 steel blocks in your inventory. Try again!")
+            return false
+        end
+        return true
+    end,
+}, 3)
+
+register_quest("on_placenode", "default:goldblock", {
+    reward = "default:mese_crystal",
+    count = 1,
+    description = "Place 1 gold block while having 4 gold blocks in your inventory",
+    on_completed = function(pos, name)
+        local player = minetest.get_player_by_name(name)
+        local inv = player:get_inventory()
+
+        if not inv:contains_item("main", ItemStack("default:goldblock 4")) then
+            minetest.chat_send_player(name, "[Skyblock]: You need 4 gold blocks in your inventory. Try again!")
+            return false
+        end
+        return true
+    end,
+}, 3)
+
+-- Define quests for level 4
+skyblock.quests[4] = {
+    on_dignode = {},
+    on_placenode = {},
+    on_craft = {},
+
+    on_completed = function(name)
+        minetest.chat_send_all("[Skyblock]: " .. name .. " completed level 4!")
+
+        skyblock.init_level(name, 5) -- Start level 5
+    end,
 }
 
+-- Register quests for level 4
+register_quest("on_placenode", "basic_machines:mover", {
+    reward = "farming:corn",
+    count = 1,
+    description = "Place a mover"
+}, 4)
 
-NOTE: 
-- on_completed allows to do more complicated quests like: 'place diamondblock while having 2 buckets of water in inventory'
-- if on_completed is missing extra checks are skipped
+register_quest("on_placenode", "basic_machines:generator", {
+    reward = "farming:grapes",
+    count = 1,
+    description = "Place a generator"
+}, 4)
 
+register_quest("on_placenode", "basic_machines:clockgen", {
+    reward = "farming:blueberries",
+    count = 1,
+    description = "Place a clock generator"
+}, 4)
 
-api player data structure:
+register_quest("on_placenode", "basic_machines:autocrafter", {
+    reward = "farming:beans",
+    count = 1,
+    description = "Place an autocrafter"
+}, 4)
 
-	skyblock.players[name] = { completed = how many completed?, total = how many quests to complete, quest_type = { item = {completed = false/true} }}
-		
---]]
+register_quest("on_placenode", "basic_machines:enviro", {
+    reward = "farming:tomato",
+    count = 1,
+    description = "Place an environment block"
+}, 4)
+
+register_quest("on_placenode", "default:diamondblock", {
+    reward = "default:pine_leaves",
+    count = 1,
+    description = "Place 1 diamond block while having 3167 diamond blocks in your inventory",
+    on_completed = function(pos, name)
+        local player = minetest.get_player_by_name(name)
+        local inv = player:get_inventory()
+
+        if not inv:contains_item("main", ItemStack("default:diamondblock 3167")) then
+            minetest.chat_send_player(name, "[Skyblock]: You need 3167 diamond blocks in your inventory. Try again!")
+            return false
+        end
+        return true
+    end,
+}, 4)
+
+register_quest("on_placenode", "default:mese", {
+    reward = "default:acacia_leaves",
+    count = 1,
+    description = "Place 1 mese block while having 1000 mese blocks in your inventory",
+    on_completed = function(pos, name)
+        local player = minetest.get_player_by_name(name)
+        local inv = player:get_inventory()
+
+        if not inv:contains_item("main", ItemStack("default:mese 1000")) then
+            minetest.chat_send_player(name, "[Skyblock]: You need 1000 mese blocks in your inventory. Try again!")
+            return false
+        end
+        return true
+    end,
+}, 4)
+
+register_quest("on_placenode", "default:goldblock", {
+    reward = "default:cactus",
+    count = 1,
+    description = "Place 1 gold blokc while having 1000 gold blocks in your inventory",
+    on_completed = function(pos, name)
+        local player = minetest.get_player_by_name(name)
+        local inv = player:get_inventory()
+
+        if not inv:contains_item("main", ItemStack("default:goldblock 1000")) then
+            minetest.chat_send_player(name, "[Skyblock]: You need 1000 gold blocks in your inventory. Try again!")
+            return false
+        end
+        return true
+    end,
+}, 4)
+
+register_quest("on_craft", "basic_robot:spawner", {
+    reward = "farming:cocoa_beans",
+    count = 1,
+    description = "Craft a robot spawner"
+}, 4)
+
+-- Define quests for level 5
+skyblock.quests[5] = {
+    on_dignode = {},
+    on_placenode = {},
+    on_craft = {},
+
+    on_completed = function(name)
+        minetest.chat_send_all("[Skyblock]: " .. name .. " completed level 5!")
+
+        skyblock.init_level(name, 6) -- Start level 6
+
+        local privs = core.get_player_privs(name)
+        privs.fly = true,
+        core.set_player_privs(name, privs)
+        minetest.auth_reload()
+        minetest.chat_send_player(name, "[Skyblock]: You now have fly privs as a reward! You can now fly around.")
+    end,
+}
+
+-- Register quests for level 5
+register_quest("on_dignode", "moreblocks:dirt_compressed", {
+    reward = "gloopblocks:evil_block 3",
+    count = 3167,
+    description = "Dig 3167 compressed dirt blocks"
+}, 5)
+
+register_quest("on_dignode", "default:obsidian", {
+    reward = "default:acacia_sapling",
+    count = 1000,
+    description = "Dig 1000 obsidian"
+}, 5)
+
+register_quest("on_placenode", "basic_materials:concrete_block", {
+    reward = "default:aspen_sapling",
+    count = 1,
+    description = "Place 1 concrete block while having 3167 concrete blocks in your inventory",
+    on_completed = function(pos, name)
+        local player = minetest.get_player_by_name(name)
+        local inv = player:get_inventory()
+
+        if not inv:contains_item("main", ItemStack("basic_materials:concrete_block 3167")) then
+            minetest.chat_send_player(name, "[Skyblock]: You need 3167 concrete blocks in your inventory. Try again!")
+            return false
+        end
+        return true
+    end,
+}, 5)
+
+register_quest("on_craft", "moreblocks:cactus_brick", {
+    reward = "default:emergent_jungle_sapling",
+    count = 1,
+    description = "Place 1 cactus brick while having 3167 cactus bricks in your inventory",
+    on_completed = function(pos, name)
+        local player = minetest.get_player_by_name(name)
+        local inv = player:get_inventory()
+
+        if not inv:contains_item("main", ItemStack("moreblocks:cactus_brick")) then
+            minetest.chat_send_player(name, "[Skyblock]: You need 3167 cactus bricks in your inventory. Try again!")
+            return false
+        end
+        return true
+    end,
+}, 5)
+
+register_quest("on_craft", "moreores:mithril_block", {
+    reward = "currency:shop",
+    count = 1,
+    description = "Place 1 mithril block while having 3167 mithril blocks in your inventory",
+    on_completed = function(pos, name)
+        local player = minetest.get_player_by_name(name)
+        local inv = player:get_inventory()
+
+        if not inv:contains_item("main", ItemStack("moreores:mithril_block 3167")) then
+            minetest.chat_send_player(name, "[Skyblock]: You need 3167 mithril blocks in your inventory. Try again!")
+            return false
+        end
+        return true
+    end,
+}, 5)
+
+register_quest("on_craft", "moreores:silver_block", {
+    reward = "currency:minegeld_100",
+    count = 1,
+    description = "Place 1 silver block while having 3167 silver blocks in your inventory",
+    on_completed = function(pos, name)
+        local player = minetest.get_player_by_name(name)
+        local inv = player:get_inventory()
+
+        if not inv:contains_item("main", ItemStack("moreores:silver_block 3167")) then
+            minetest.chat_send_player(name, "[Skyblock]: You need 3167 silver blocks in your inventory. Try again!")
+            return false
+        end
+        return true
+    end,
+}, 5)
+
+register_quest("on_craft", "moreblocks:copperpatina", {
+    reward = "default:cactus",
+    count = 1000,
+    description = "Craft 1000 copper patina blocks"
+}, 5)
+
+register_quest("on_craft", "gloopblocks:rainbow_block_horizontal", {
+    reward = "maptools:infinitefuel",
+    count = 4950,
+    description = "Craft 4950 rainbow horizontal blocks"
+}, 5)
+
+register_quest("on_craft", "basic_robot:spawner", {
+    reward = "farming:cocoa_beans",
+    count = 1,
+    description = "Craft a robot spawner"
+}, 5)
+
+register_quest("on_craft", "moreblocks:iron_checker", {
+    reward = "homedecor:wardrobe",
+    count = 1584,
+    description = "Craft 1584 iron checker blocks"
+}, 5)
+
+-- Define quests for level 6
+skyblock.quests[6] = {}
+
+--Supported quest types
+skyblock.quest_types = {
+    on_dignode = true, 
+    on_placenode = true, 
+    on_craft = true
+};
